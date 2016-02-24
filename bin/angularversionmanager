@@ -1,0 +1,370 @@
+#!/usr/bin/env bash
+
+#
+# Setup.
+#
+
+VERSION="0.1.2"
+ANGULARVERSIONMANAGER_PREFIX=${ANGULARVERSIONMANAGER_PREFIX-/usr/local}
+VERSIONS_DIR=$ANGULARVERSIONMANAGER_PREFIX/angularversionmanager/versions
+UP=$'\033[A'
+DOWN=$'\033[B'
+
+test -d $VERSIONS_DIR || mkdir -p $VERSIONS_DIR
+
+#
+# Log <type> <msg>
+#
+
+log() {
+  printf "  \033[36m%10s\033[0m : \033[90m%s\033[0m\n" $1 $2
+}
+
+#
+# Exit with the given <msg ...>
+#
+
+abort() {
+  printf "\n  \033[31mError: $@\033[0m\n\n" && exit 1
+}
+
+#
+# require npm
+#
+
+command -v npm > /dev/null || abort "npm not found"
+
+#
+# Ensure we have curl or wget support.
+#
+
+GET=
+command -v wget > /dev/null && GET="wget --no-check-certificate -q -O-"
+command -v curl > /dev/null && GET="curl -# -L"
+test -z "$GET" && abort "curl or wget required"
+
+#
+# Output usage information.
+#
+
+display_help() {
+  cat <<-EOF
+
+  Usage: angularversionmanager [options] [COMMAND] [args]
+
+  Commands:
+
+    angularversionmanager                            Output versions installed
+    angularversionmanager latest                     Install or activate the latest angular release
+    angularversionmanager <version>                  Install angular <version>
+    angularversionmanager use <version> [args ...]   Execute angular <version> with [args ...]
+    angularversionmanager bin <version>              Output bin path for <version>
+    angularversionmanager rm <version ...>           Remove the given version(s)
+    angularversionmanager prev                       Revert to the previously activated version
+    angularversionmanager --latest                   Output the latest angular version available
+    angularversionmanager ls                         Output the versions of angular available
+
+  Options:
+
+    -V, --version   Output current version of angularversionmanager
+    -h, --help      Display help information
+
+  Aliases:
+
+    which   bin
+    as      use
+    list    ls
+    -       rm
+
+EOF
+  exit 0
+}
+
+#
+# Hide cursor.
+#
+
+hide_cursor() {
+  printf "\e[?25l"
+}
+
+#
+# Show cursor.
+#
+
+show_cursor() {
+  printf "\e[?25h"
+}
+
+#
+# Output version after selected.
+#
+
+next_version_installed() {
+  list_versions_installed | grep $selected -A 1 | tail -n 1
+}
+
+#
+# Output version before selected.
+#
+
+prev_version_installed() {
+  list_versions_installed | grep $selected -B 1 | head -n 1
+}
+
+#
+# Output n version.
+#
+
+display_n_version() {
+  echo $VERSION && exit 0
+}
+
+#
+# Check for installed version, and populate $active
+#
+
+check_current_version() {
+  which angular &> /dev/null
+  if test $? -eq 0; then
+    active=`angular --version`
+    active=${active#v}
+  fi
+}
+
+#
+# Display sorted versions directories paths.
+#
+
+versions_paths() {
+  ls -d $VERSIONS_DIR/* \
+    | egrep "/[0-9]+\.[0-9]+\.[0-9]+$" \
+    | sort -k 1,1n -k 2,2n -k 3,3n -t .
+}
+
+#
+# Display installed versions with <selected>
+#
+
+display_versions_with_selected() {
+  selected=$1
+  echo
+  for dir in `versions_paths`; do
+    local version=${dir##*/}
+    if test "$version" = "$selected"; then
+      printf "  \033[36mο\033[0m $version\033[0m\n"
+    else
+      printf "    \033[90m$version\033[0m\n"
+    fi
+  done
+  echo
+}
+
+#
+# List installed versions.
+#
+
+list_versions_installed() {
+  for dir in `versions_paths`; do
+    local version=${dir##*/}
+    echo $version
+  done
+}
+
+#
+# Display current angular --version and others installed.
+#
+
+display_versions() {
+  clear
+  check_current_version
+  display_versions_with_selected $active
+
+  while true; do
+    read -s -n 3 c
+    case "$c" in
+      $UP)
+        clear
+        display_versions_with_selected $(prev_version_installed)
+        ;;
+      $DOWN)
+        clear
+        display_versions_with_selected $(next_version_installed)
+        ;;
+      *)
+        clear
+        activate $selected
+        exit
+        ;;
+    esac
+  done
+}
+
+#
+# Move up a line and erase.
+#
+
+erase_line() {
+  printf "\033[1A\033[2K"
+}
+
+#
+# Check if the HEAD response of <url> is 200.
+#
+
+is_ok() {
+  curl -Is $1 | head -n 1 | grep 200 > /dev/null
+}
+
+#
+# Activate <version>
+#
+
+activate() {
+  local version=$1
+  check_current_version
+  if test "$version" != "$active"; then
+    local dir=$VERSIONS_DIR/$version
+    echo $active > $VERSIONS_DIR/.prev
+    mkdir -p $ANGULARVERSIONMANAGER_PREFIX/bin
+    rm -f $ANGULARVERSIONMANAGER_PREFIX/bin/angular
+    ln -s $dir/node_modules/angular/bin/angular.js $ANGULARVERSIONMANAGER_PREFIX/bin/angular
+  fi
+}
+
+#
+# Activate previous angular.
+#
+
+activate_previous() {
+  test -f $VERSIONS_DIR/.prev || abort "no previous versions activated"
+  local prev=$(cat $VERSIONS_DIR/.prev)
+  test -d $VERSIONS_DIR/$prev || abort "previous version $prev not installed"
+  activate $prev
+  echo
+  log activate $prev
+  echo
+}
+
+#
+# Install <version>
+#
+
+install_angular() {
+  local version=${1#v}
+  
+  local dots=`echo $version | sed 's/[^.]*//g'`
+  local dir=$VERSIONS_DIR/$version
+
+  if test -d $dir; then
+    activate $version
+    log exists $(angular --version)
+    exit
+  fi
+
+  echo
+  log install v$version
+
+  log mkdir $dir
+  mkdir -p $dir
+  if [ $? -ne 0 ] ; then
+    abort "sudo required"
+  fi
+
+  cd $dir
+
+  log install $version
+  npm install angular@$version
+  if [ $? -ne 0 ]; then
+    log rm $dir
+    rm -R $dir
+    abort "angular $version install failed"
+  fi
+  #erase_line
+
+  activate $version
+  log installed $(angular --version)
+  echo
+}
+
+#
+# Remove <version ...>
+#
+
+remove_versions() {
+  test -z $1 && abort "version(s) required"
+  while test $# -ne 0; do
+    rm -rf $VERSIONS_DIR/${1#v}
+    shift
+  done
+}
+
+#
+# Output bin path for <version>
+#
+
+display_bin_path_for_version() {
+  test -z $1 && abort "version required"
+  local version=${1#v}
+  local bin=$VERSIONS_DIR/$version/node_modules/angular/bin/angular.js
+  if test -f $bin; then
+    printf $bin
+  else
+    abort "$1 is not installed"
+  fi
+}
+
+#
+# Execute the given <version> of angular with [args ...]
+#
+
+execute_with_version() {
+  test -z $1 && abort "version required"
+  local version=${1#v}
+  local bin=$VERSIONS_DIR/$version/node_modules/angular/bin/angular.js
+
+  shift # remove version
+
+  if test -f $bin; then
+    $bin $@
+  else
+    abort "$version is not installed"
+  fi
+}
+
+#
+# Display the latest angular release version.
+#
+
+display_latest_version() {
+  npm show angular version --loglevel silent | xargs
+}
+
+display_available_versions() {
+    npm show angular versions
+}
+
+#
+# Handle arguments.
+#
+
+if test $# -eq 0; then
+  test "$(ls -l $VERSIONS_DIR | grep ^d)" || abort "no installed version"
+  display_versions
+else
+  while test $# -ne 0; do
+    case $1 in
+      -V|--version) display_n_version ;;
+      -h|--help|help) display_help ;;
+      --latest) display_latest_version; exit ;;
+      bin|which) display_bin_path_for_version $2; exit ;;
+      as|use) shift; execute_with_version $@; exit ;;
+      rm|-) shift; remove_versions $@; exit ;;
+      latest) install_angular `angularversionmanager --latest`; exit ;;
+      prev) activate_previous; exit ;;
+      ls) display_available_versions; exit ;;
+      *) install_angular $1; exit ;;
+    esac
+    shift
+  done
+fi

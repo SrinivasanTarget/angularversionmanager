@@ -1,0 +1,12 @@
+{   "name": "angular-version-manager"
+  , "description": "Angular version manager"
+  , "version": "0.0.1"
+  , "author": "Srinivasan Sekar <srinivasan.sekar1990@gmail.com>"
+  , "homepage": "https://github.com/SrinivasanTarget/angularversionmanager"
+  , "bugs": "https://github.com/SrinivasanTarget/angularversionmanager/issues"
+  , "keywords": ["node", "binary", "version", "angularjs", "angular"]
+  , "bin": { "angularversionmanager": "./bin/angularversionmanager" }
+  , "repository": { "type": "git", "url": "git://github.com/SrinivasanTarget/angularversionmanager.git" }
+  , "engines": { "node": "*" }
+  , "license": "MIT"
+}
